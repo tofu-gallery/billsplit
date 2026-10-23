@@ -4,7 +4,9 @@ import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
-import PlausibleProvider from "next-plausible";
+// Tofu: changed. Upstream loaded Plausible analytics for usebillsplit.com here,
+// which would report every visit to a copy of this app to upstream's
+// analytics account, so this copy loads no analytics script.
 const instrumentSans = Instrument_Sans({
   variable: "--font-instrument-sans",
   subsets: ["latin"],
@@ -23,9 +25,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <PlausibleProvider domain="usebillsplit.com" />
-      </head>
       <body className={`${instrumentSans.variable} antialiased`}>
         <NuqsAdapter>
           <div className="flex flex-col min-h-screen items-center bg-[#f4eeec] w-full mx-auto relative overflow-hidden">
