@@ -6,8 +6,12 @@ import { UseFormReturn } from "react-hook-form";
 import { BillForm } from "../types";
 import Dropzone from "react-dropzone";
 import { useEffect, useMemo, useState } from "react";
-import { ExtractSchemaType } from "@/lib/scrapeBill";
-import { uploadReceiptImage } from "@/lib/client-receipt-upload";
+// Tofu: the receipt goes to /api/vision as a downscaled data URL instead of an
+// S3 upload, and nothing from the server-side scrapeBill module is imported here.
+import {
+  getReceiptScanErrorMessage,
+  scanReceipt,
+} from "@/lib/client-receipt-scan";
 import { MAX_RECEIPT_UPLOAD_BYTES } from "@/lib/image-upload";
 import { createId } from "../utils";
 import Decimal from "decimal.js";
@@ -25,6 +29,8 @@ export const UploadOrManualBill = ({
 }) => {
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Tofu: why the last scan failed, shown under the button.
+  const [error, setError] = useState<string | null>(null);
   const { register, watch } = formObject;
 
   useEffect(() => {
@@ -47,22 +53,12 @@ export const UploadOrManualBill = ({
   const processBill = async () => {
     if (!file) return;
     setIsLoading(true);
+    setError(null);
     localStorage.removeItem("billFormData");
     try {
-      const uploadedBill = await uploadReceiptImage(file);
-
-      const response = await fetch("/api/vision", {
-        method: "POST",
-        body: JSON.stringify({
-          billUrl: uploadedBill.url,
-          billKey: uploadedBill.key,
-        }),
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-
-      const extractedData = (await response.json()) as ExtractSchemaType;
+      // Tofu: replaces the S3 upload and the /api/vision request; a failed
+      // scan throws instead of moving on with an empty bill.
+      const extractedData = await scanReceipt(file);
 
       formObject.setValue(
         "businessName",
@@ -88,6 +84,7 @@ export const UploadOrManualBill = ({
     } catch (e) {
       // toast error couldn't process bill visually
       console.error("Error processing bill:", e);
+      setError(getReceiptScanErrorMessage(e));
     } finally {
       setIsLoading(false);
     }
@@ -166,6 +163,7 @@ export const UploadOrManualBill = ({
             return;
           }
           setFile(file);
+          setError(null);
         }}
       >
         {({ getRootProps, getInputProps }) => (
@@ -259,6 +257,12 @@ export const UploadOrManualBill = ({
           {!isLoading && <span>Scrape the Bill</span>}
         </span>
       </Button>
+      {/* Tofu: why the last scan failed, such as a missing Together AI key. */}
+      {error && (
+        <p role="alert" className="w-full text-sm text-center text-red-600">
+          {error}
+        </p>
+      )}
     </>
   );
 };

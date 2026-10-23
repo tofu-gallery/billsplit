@@ -1,24 +1,7 @@
 import { z } from "zod";
-import { togetherBaseClient } from "./clients";
+import { getTogetherClient } from "./clients";
 import dedent from "dedent";
-import {
-  endAndFlushBraintrustSpan,
-  logBraintrustEvent,
-  startBraintrustSpan,
-} from "./braintrust";
-import {
-  buildReceiptTraceStart,
-  buildReceiptTraceSuccess,
-} from "./receipt-tracing";
-import {
-  extractDataUrlBase64,
-  serializeBraintrustError,
-} from "./trace-safety";
-import {
-  DEFAULT_VISION_MODEL,
-  RECEIPT_TRACE_PHASES,
-  type ReceiptTracePhase,
-} from "./vision-model-config";
+import { DEFAULT_VISION_MODEL } from "./vision-model-config";
 
 export { DEFAULT_VISION_MODEL } from "./vision-model-config";
 
@@ -89,114 +72,54 @@ export async function scrapeBill({
     target: "openapi-3.0",
   });
 
-  const span = startBraintrustSpan({
-    name: "billsplit.extract-receipt",
-    type: "llm",
-    event: buildReceiptTraceStart({
-      model,
-      traceMarker: process.env.BRAINTRUST_TRACE_MARKER,
-    }),
-  });
-  const startedAt = performance.now();
-  let providerStartedAt: number | undefined;
-  let providerDurationMs: number | undefined;
-  let phase: ReceiptTracePhase = RECEIPT_TRACE_PHASES.provider;
-
-  try {
-    providerStartedAt = performance.now();
-    const completion = await togetherBaseClient.chat.completions.create({
-      model: model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: systemPrompt },
-            {
-              type: "image_url",
-              image_url: {
-                url: billUrl,
-              },
+  // Tofu: the model call no longer goes through Braintrust tracing, so this
+  // copy needs no Braintrust key. The client is created on first use with the
+  // owner's TOGETHER_API_KEY (see ./clients).
+  const completion = await getTogetherClient().chat.completions.create({
+    model: model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: systemPrompt },
+          {
+            type: "image_url",
+            image_url: {
+              url: billUrl,
             },
-          ],
-        },
-      ],
-      reasoning: { enabled: false },
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "receipt",
-          schema: jsonSchema,
-        },
+          },
+        ],
       },
-      temperature: 0, // Make responses more deterministic
-      max_tokens: 1000, // Limit response length
-    });
-    providerDurationMs = performance.now() - providerStartedAt;
+    ],
+    reasoning: { enabled: false },
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "receipt",
+        schema: jsonSchema,
+      },
+    },
+    temperature: 0, // Make responses more deterministic
+    max_tokens: 1000, // Limit response length
+  });
 
-    if (completion?.choices?.[0]?.message?.content) {
-      let content = completion.choices[0].message.content.trim();
+  if (completion?.choices?.[0]?.message?.content) {
+    let content = completion.choices[0].message.content.trim();
 
-      // Handle cases where the model returns markdown code blocks
-      if (content.startsWith("```json")) {
-        content = content.replace(/^```json\s*/, "").replace(/\s*```$/, "");
-      } else if (content.startsWith("```")) {
-        content = content.replace(/^```\s*/, "").replace(/\s*```$/, "");
-      }
-
-      // Try to extract JSON from text that might contain explanations
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        content = jsonMatch[0];
-      }
-
-      phase = RECEIPT_TRACE_PHASES.responseValidation;
-      const receipt = extractSchema.parse(JSON.parse(content));
-      logBraintrustEvent(
-        span,
-        buildReceiptTraceSuccess({
-          response: completion,
-          receipt,
-          model,
-          durationMs: performance.now() - startedAt,
-          providerDurationMs,
-        }),
-      );
-      return receipt;
-    }
-    phase = RECEIPT_TRACE_PHASES.providerResponse;
-    throw new Error(`No content returned from vision model: ${model}`);
-  } catch (error) {
-    const durationMs = performance.now() - startedAt;
-    const metrics: Record<string, number> = {
-      duration_ms: durationMs,
-    };
-    if (providerDurationMs !== undefined) {
-      metrics.provider_duration_ms = providerDurationMs;
-    } else if (providerStartedAt !== undefined) {
-      metrics.provider_duration_ms = performance.now() - providerStartedAt;
+    // Handle cases where the model returns markdown code blocks
+    if (content.startsWith("```json")) {
+      content = content.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+    } else if (content.startsWith("```")) {
+      content = content.replace(/^```\s*/, "").replace(/\s*```$/, "");
     }
 
-    const traceError =
-      phase === RECEIPT_TRACE_PHASES.responseValidation
-        ? new Error("Vision response failed schema validation")
-        : error;
-    logBraintrustEvent(span, {
-      error: serializeBraintrustError(traceError, [
-        process.env.TOGETHER_API_KEY,
-        process.env.BRAINTRUST_API_KEY,
-        billUrl,
-        extractDataUrlBase64(billUrl),
-      ]),
-      metadata: {
-        success: false,
-        phase,
-        model,
-      },
-      metrics,
-    });
-    console.error(`Receipt extraction failed during ${phase}`);
-    throw error;
-  } finally {
-    await endAndFlushBraintrustSpan(span);
+    // Try to extract JSON from text that might contain explanations
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      content = jsonMatch[0];
+    }
+
+    return extractSchema.parse(JSON.parse(content));
   }
+  throw new Error(`No content returned from vision model: ${model}`);
 }

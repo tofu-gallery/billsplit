@@ -14,6 +14,7 @@ vi.mock("../../../lib/s3-receipt-storage", () => ({
 }));
 
 import { POST } from "./route";
+import { MissingTogetherApiKeyError } from "../../../lib/clients";
 
 const originalEnvironment = {
   bucket: process.env.S3_UPLOAD_BUCKET,
@@ -82,6 +83,24 @@ describe("POST /api/vision", () => {
     );
 
     expect(mocks.removeReceiptObject).not.toHaveBeenCalled();
+  });
+
+  // Tofu: added with the plain answer for a missing Together AI key.
+  it("explains a missing Together AI key instead of failing", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    mocks.scrapeBill.mockRejectedValue(new MissingTogetherApiKeyError());
+
+    const response = await POST(
+      requestVision({ billUrl: "data:image/jpeg;base64,cmVjZWlwdA==" }),
+    );
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("TOGETHER_API_KEY");
+    expect(mocks.removeReceiptObject).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });
 
