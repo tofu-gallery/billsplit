@@ -1,6 +1,9 @@
 allowBuilds:
   autoevals: true
-  better-sqlite3: true
+  # Tofu (2026-10-30): not built. Only evalite, the dev-only eval tool, uses it, and this copy never loads it.
+  # better-sqlite3 11.10.0 does not compile against Node 26's V8 (the default Node of a new Vercel project since
+  # 2026-10-29), which stops the install when pnpm 10.26 or later reads this key.
+  better-sqlite3: false
   braintrust: true
   esbuild: true
   sharp: true
